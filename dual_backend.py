@@ -499,6 +499,22 @@ async def chat(request: ChatRequest):
             }
         )
 
+@app.get("/")
+async def root():
+    """Root endpoint - API info."""
+    return {
+        "service": "Dual Backend Service with Modal Integration",
+        "version": "1.0",
+        "status": "running",
+        "endpoints": {
+            "POST /chat": "Main chat endpoint with smart routing",
+            "GET /health": "Health check",
+            "POST /debug/routing": "Debug routing logic",
+            "GET /stats": "Backend statistics"
+        },
+        "modal_url": MODAL_INFERENCE_URL
+    }
+
 @app.get("/health")
 async def health():
     """Health check endpoint."""
