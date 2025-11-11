@@ -131,6 +131,38 @@ class InferenceRequest(BaseModel):
     max_tokens: int
     top_p: float
 
+# OpenAI-compatible models
+class OpenAIMessage(BaseModel):
+    role: str
+    content: str
+
+class OpenAIRequest(BaseModel):
+    model: Optional[str] = None
+    messages: List[OpenAIMessage]
+    temperature: Optional[float] = 0.7
+    max_tokens: Optional[int] = 1000
+    stream: Optional[bool] = False
+    tools: Optional[List[dict]] = None
+    tool_choice: Optional[str] = None
+
+class OpenAIChoice(BaseModel):
+    index: int
+    message: dict
+    finish_reason: str
+
+class OpenAIUsage(BaseModel):
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+class OpenAIResponse(BaseModel):
+    id: str
+    object: str = "chat.completion"
+    created: int
+    model: str
+    choices: List[OpenAIChoice]
+    usage: OpenAIUsage
+
 # HTTP Client with Retry Logic
 class ModalInferenceClient:
     """Handles communication with Modal inference endpoint with retries and error handling."""
@@ -508,6 +540,7 @@ async def root():
         "status": "running",
         "endpoints": {
             "POST /chat": "Main chat endpoint with smart routing",
+            "POST /v1/chat/completions": "OpenAI-compatible chat endpoint",
             "GET /health": "Health check",
             "POST /debug/routing": "Debug routing logic",
             "GET /stats": "Backend statistics"
@@ -549,6 +582,127 @@ async def stats():
         "inference_retries": INFERENCE_RETRIES,
         "keep_alive_interval": KEEP_ALIVE_INTERVAL,
     }
+
+@app.post("/v1/chat/completions", response_model=OpenAIResponse)
+async def openai_chat_completions(request: OpenAIRequest):
+    """
+    OpenAI-compatible chat completions endpoint.
+    Converts OpenAI format to our backend format and back.
+    """
+    request_id = str(uuid4())[:8]
+    start_time = time.time()
+    
+    try:
+        # Extract system message if present, otherwise use default
+        system_message = DEFAULT_CREATIVE_PROMPT
+        messages_to_process = []
+        
+        for msg in request.messages:
+            if msg.role == "system":
+                system_message = msg.content
+            else:
+                messages_to_process.append(Message(role=msg.role, content=msg.content))
+        
+        # If tools are provided, use deterministic backend
+        if request.tools:
+            system_message = DEFAULT_DETERMINISTIC_PROMPT
+        
+        # Create internal chat request
+        internal_request = ChatRequest(
+            system=system_message,
+            messages=messages_to_process,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens
+        )
+        
+        # Call our internal chat endpoint logic
+        backend_type, routing_reason = analyze_intent(
+            internal_request.system,
+            internal_request.messages[-1].content if internal_request.messages else ""
+        )
+        
+        config = DETERMINISTIC_CONFIG if backend_type == "deterministic" else CREATIVE_CONFIG
+        
+        if internal_request.temperature is not None:
+            config["temperature"] = internal_request.temperature
+        if internal_request.max_tokens is not None:
+            config["max_tokens"] = internal_request.max_tokens
+        
+        prompt, tokens_input = build_prompt(system_message, internal_request.messages)
+        
+        inference_result = await inference_client.infer(
+            prompt=prompt,
+            temperature=config["temperature"],
+            max_tokens=config["max_tokens"],
+            top_p=config["top_p"]
+        )
+        
+        normalized_text = normalize_response(
+            inference_result["text"],
+            backend_type
+        )
+        
+        # Convert to OpenAI format
+        created_timestamp = int(time.time())
+        
+        # Parse tool calls if present in response
+        response_message = {"role": "assistant", "content": normalized_text}
+        
+        # Try to parse tool calls from the response
+        if backend_type == "deterministic":
+            try:
+                parsed = json.loads(normalized_text)
+                if "tool_calls" in parsed:
+                    # Convert to OpenAI tool call format
+                    tool_calls = []
+                    for i, tc in enumerate(parsed["tool_calls"]):
+                        tool_calls.append({
+                            "id": f"call_{request_id}_{i}",
+                            "type": "function",
+                            "function": {
+                                "name": tc.get("name", ""),
+                                "arguments": json.dumps(tc.get("arguments", {}))
+                            }
+                        })
+                    response_message = {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": tool_calls
+                    }
+            except json.JSONDecodeError:
+                # If parsing fails, just return as content
+                pass
+        
+        return OpenAIResponse(
+            id=f"chatcmpl-{request_id}",
+            created=created_timestamp,
+            model=request.model or "Qwen3-1.7B",
+            choices=[
+                OpenAIChoice(
+                    index=0,
+                    message=response_message,
+                    finish_reason=inference_result["finish_reason"]
+                )
+            ],
+            usage=OpenAIUsage(
+                prompt_tokens=tokens_input,
+                completion_tokens=inference_result["tokens_output"],
+                total_tokens=tokens_input + inference_result["tokens_output"]
+            )
+        )
+    
+    except Exception as e:
+        logger.error(f"[{request_id}] OpenAI endpoint error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": {
+                    "message": str(e),
+                    "type": "server_error",
+                    "code": "internal_error"
+                }
+            }
+        )
 
 # Startup/Shutdown
 @app.on_event("startup")
