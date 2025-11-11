@@ -18,17 +18,50 @@ app = FastAPI(title="Dual Backend Service with Modal Integration")
 
 # Configuration & System Prompts
 
-DEFAULT_DETERMINISTIC_PROMPT = """You are a recruitment assistant. Generate valid JSON with tool calls.
-For searching: {"tool_calls": [{"name": "search_candidates", "arguments": {"role": "...", "industry": "...", "location": "..."}}]}
-For scheduling: {"tool_calls": [{"name": "schedule_interview", "arguments": {"candidate_id": "...", "candidate_name": "...", "interview_time": "...", "role": "..."}}]}
-Output ONLY valid JSON. You must ALWAYS call search_candidates first before schedule_interviews.
-Never schedule interviews unless candidates were returned from a previous tool_response.
-If a user requests scheduling without a prior search, search first.
-Never make up candidate IDs or names."""
+DEFAULT_DETERMINISTIC_PROMPT = """You are a recruitment assistant that converts user requests into structured tool calls.
 
-DEFAULT_CREATIVE_PROMPT = """You are a creative writing assistant. Write helpful, engaging, and original responses.
+IMPORTANT: Always respond in ENGLISH only.
+
+ALWAYS respond with ONLY valid JSON in this exact format:
+{
+  "tool_calls": [
+    {
+      "name": "search_candidates",
+      "arguments": {
+        "role": "job title",
+        "industry": "industry name",
+        "location": "location name",
+        "skills": ["optional", "skills", "list"],
+        "years_experience": 0
+      }
+    }
+  ]
+}
+
+Rules:
+1. Extract role, industry, and location from user message
+2. Extract any mentioned skills
+3. Extract years of experience if mentioned
+4. Return ONLY the JSON, no other text
+5. Use "search_candidates" as the tool name
+6. All responses must be in ENGLISH
+
+Examples:
+- User: "I want frontend developers in FinTech in Kenya"
+  Response: {"tool_calls": [{"name": "search_candidates", "arguments": {"role": "frontend developer", "industry": "FinTech", "location": "Kenya"}}]}
+
+- User: "Hire backend devs with 5+ years in HealthTech in Nairobi"
+  Response: {"tool_calls": [{"name": "search_candidates", "arguments": {"role": "backend developer", "industry": "HealthTech", "location": "Nairobi", "years_experience": 5}}]}
+"""
+
+DEFAULT_CREATIVE_PROMPT = """You are a helpful and creative assistant. 
+
+IMPORTANT: Always respond in ENGLISH only.
+
+Write helpful, engaging, and original responses in English.
 Be thoughtful, conversational, and natural in your writing.
-Provide rich, detailed, and well-structured responses."""
+Provide rich, detailed, and well-structured responses.
+Use simple, clear language that anyone can understand."""
 
 DETERMINISTIC_CONFIG = {
     "name": "deterministic",
@@ -235,15 +268,17 @@ def analyze_intent(system_message: str, user_message: str) -> tuple[str, str]:
 def build_prompt(system: str, messages: List[Message]) -> tuple[str, int]:
     """
     Assembles final prompt from system message and conversation.
+    Uses Qwen chat format with explicit English instruction.
     Returns: (prompt, estimated_input_tokens)
     """
-    prompt = f"{system}\n\n"
+    # Use Qwen's chat template format with language control
+    prompt = f"<|im_start|>system\n{system}\n\nIMPORTANT: You MUST respond in English language only. Never use Chinese, Japanese, or any other language.<|im_end|>\n"
     
     for msg in messages:
-        role = "User" if msg.role == "user" else "Assistant"
-        prompt += f"{role}: {msg.content}\n"
+        role = "user" if msg.role == "user" else "assistant"
+        prompt += f"<|im_start|>{role}\n{msg.content}<|im_end|>\n"
     
-    prompt += "Assistant: "
+    prompt += "<|im_start|>assistant\n"
     
     # Rough token estimation (1 token ≈ 4 characters)
     estimated_tokens = len(prompt) // 4
@@ -261,6 +296,8 @@ def normalize_response(raw_output: str, backend_type: str) -> str:
     """
     text = raw_output.strip()
     
+    logger.info(f"Raw model output: {text[:200]}...")
+    
     # Strip markdown code fences
     if text.startswith("```json"):
         text = text[7:]
@@ -274,21 +311,71 @@ def normalize_response(raw_output: str, backend_type: str) -> str:
     # Validate JSON for deterministic backend
     if backend_type == "deterministic":
         try:
-            json.loads(text)
-            logger.info("Output is valid JSON")
+            # First try: parse the text as-is
+            parsed = json.loads(text)
+            logger.info("✓ Output is valid JSON (as-is)")
+            
+            # Check if it needs wrapping in tool_calls array
+            if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
+                # Model returned single tool call, wrap it in tool_calls array
+                wrapped = {"tool_calls": [parsed]}
+                logger.info("ℹ️ Wrapped single tool call in tool_calls array")
+                return json.dumps(wrapped)
+            
+            return text
+            
         except json.JSONDecodeError:
-            logger.warning(f"Deterministic output not valid JSON: {text[:100]}")
-            # Attempt to extract JSON
+            logger.warning(f"Initial JSON parse failed, attempting extraction...")
+            
+            # Second try: extract JSON object from text
             if "{" in text and "}" in text:
+                # Find the first { and last }
                 start = text.find("{")
                 end = text.rfind("}") + 1
-                text = text[start:end]
+                extracted = text[start:end]
+                
                 try:
-                    json.loads(text)
-                    logger.info("Successfully extracted valid JSON")
+                    parsed = json.loads(extracted)
+                    logger.info(f"✓ Successfully extracted valid JSON: {extracted[:100]}...")
+                    
+                    # Check if it needs wrapping
+                    if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
+                        wrapped = {"tool_calls": [parsed]}
+                        logger.info("ℹ️ Wrapped extracted tool call in tool_calls array")
+                        return json.dumps(wrapped)
+                    
+                    return extracted
+                    
                 except json.JSONDecodeError:
-                    logger.error("Could not extract valid JSON from response")
-                    raise ValueError("Could not extract valid JSON from response")
+                    logger.warning(f"Extracted JSON still invalid: {extracted[:100]}...")
+            
+            # Third try: Look for nested JSON (handle multiple braces)
+            import re
+            json_pattern = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
+            matches = re.findall(json_pattern, text, re.DOTALL)
+            
+            for match in matches:
+                try:
+                    parsed = json.loads(match)
+                    # Verify it has the expected structure for tool calls
+                    if "tool_calls" in parsed or isinstance(parsed, dict):
+                        logger.info(f"✓ Found valid JSON via regex: {match[:100]}...")
+                        
+                        # Check if it needs wrapping
+                        if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
+                            wrapped = {"tool_calls": [parsed]}
+                            logger.info("ℹ️ Wrapped regex-found tool call in tool_calls array")
+                            return json.dumps(wrapped)
+                        
+                        return match
+                except json.JSONDecodeError:
+                    continue
+            
+            # If all extraction attempts fail, log the full output and return as-is
+            # (let the client handle it)
+            logger.error(f"⚠️ Could not extract valid JSON. Full output:\n{text}")
+            logger.info("Returning raw output for client-side handling")
+            return text
     
     return text
 
@@ -375,6 +462,11 @@ async def chat(request: ChatRequest):
             inference_result["text"],
             backend_type
         )
+        
+        # Step 7.5: Check for Chinese characters and log warning
+        if any('\u4e00' <= char <= '\u9fff' for char in normalized_text):
+            logger.warning(f"[{request_id}] ⚠️ Response contains Chinese characters despite English instruction")
+            logger.warning(f"[{request_id}] This may indicate the model is ignoring language instructions")
         
         # Step 8: Calculate latency
         latency_ms = (time.time() - start_time) * 1000
