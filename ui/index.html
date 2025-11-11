@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Gigsama - Recruitment Assistant</title>
+  <style>
+    body { 
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      margin: 0; 
+      padding: 20px; 
+      min-height: 100vh;
+    }
+    .chat-box { 
+      max-width: 700px; 
+      margin: 0 auto; 
+      background: white; 
+      padding: 25px; 
+      border-radius: 15px; 
+      box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+    }
+    h2 {
+      color: #667eea;
+      margin-top: 0;
+      text-align: center;
+      font-size: 24px;
+    }
+    .subtitle {
+      text-align: center;
+      color: #666;
+      font-size: 14px;
+      margin-top: -10px;
+      margin-bottom: 20px;
+    }
+    .messages { 
+      height: 450px; 
+      overflow-y: auto; 
+      border: 1px solid #e0e0e0; 
+      padding: 15px; 
+      margin-bottom: 15px; 
+      border-radius: 10px;
+      background: #fafafa;
+    }
+    .message {
+      margin: 10px 0;
+      padding: 10px 15px;
+      border-radius: 10px;
+      max-width: 80%;
+      word-wrap: break-word;
+    }
+    .user-message {
+      background: #667eea;
+      color: white;
+      margin-left: auto;
+      text-align: right;
+    }
+    .bot-message {
+      background: #f0f0f0;
+      color: #333;
+    }
+    .timestamp {
+      font-size: 10px;
+      color: #999;
+      margin-top: 5px;
+      font-style: italic;
+    }
+    .timing {
+      display: inline-block;
+      background: #e8f5e9;
+      color: #2e7d32;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      margin-left: 5px;
+      font-weight: bold;
+    }
+    .tool-call {
+      background: #fff3cd;
+      border-left: 4px solid #ffc107;
+      padding: 10px;
+      margin: 10px 0;
+      border-radius: 5px;
+      font-family: monospace;
+      font-size: 12px;
+    }
+    .input-container {
+      display: flex;
+      gap: 10px;
+    }
+    input { 
+      flex: 1;
+      padding: 12px; 
+      border: 2px solid #e0e0e0;
+      border-radius: 25px;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.3s;
+    }
+    input:focus {
+      border-color: #667eea;
+    }
+    button { 
+      padding: 12px 25px;
+      background: #667eea;
+      color: white;
+      border: none;
+      border-radius: 25px;
+      cursor: pointer;
+      font-weight: bold;
+      transition: background 0.3s;
+    }
+    button:hover {
+      background: #5568d3;
+    }
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    .loading {
+      display: none;
+      text-align: center;
+      color: #667eea;
+      padding: 10px;
+    }
+    .status {
+      text-align: center;
+      font-size: 12px;
+      color: #666;
+      margin-top: 10px;
+    }
+    .connected { color: #28a745; }
+    .disconnected { color: #dc3545; }
+  </style>
+</head>
+<body>
+  <div class="chat-box">
+    <h2>� Gigsama - AI Recruitment Assistant</h2>
+    <p class="subtitle">Powered by Qwen3 1.7B | Local Testing Mode</p>
+    <div class="messages" id="messages"></div>
+    <div class="loading" id="loading">🤖 Thinking...</div>
+    <div class="input-container">
+      <input type="text" id="input" placeholder="Try: 'Hello' or 'Find backend developers in FinTech'" onkeypress="handleKeyPress(event)" />
+      <button onclick="sendMessage()" id="sendBtn">Send</button>
+    </div>
+    <div class="status" id="status">Ready to chat</div>
+  </div>
+
+  <script>
+    const messagesDiv = document.getElementById('messages');
+    const input = document.getElementById('input');
+    const loading = document.getElementById('loading');
+    const sendBtn = document.getElementById('sendBtn');
+    const status = document.getElementById('status');
+
+    // Backend URL - change this for deployment
+    const BACKEND_URL = "http://127.0.0.1:8001";
+
+    // Check backend health on load
+    async function checkHealth() {
+      try {
+        const res = await fetch(`${BACKEND_URL}/health`);
+        if (res.ok) {
+          status.innerHTML = '🟢 <span class="connected">Connected to local backend</span>';
+        } else {
+          status.innerHTML = '🔴 <span class="disconnected">Backend not responding</span>';
+        }
+      } catch (err) {
+        status.innerHTML = '🔴 <span class="disconnected">Backend offline - Start with: python dual_backend.py</span>';
+      }
+    }
+
+    checkHealth();
+
+    function appendMessage(type, content, isToolCall = false, timing = null) {
+      const div = document.createElement('div');
+      div.className = `message ${type}-message`;
+      
+      if (isToolCall) {
+        div.className = 'tool-call';
+        div.innerHTML = `<strong>🔧 Tool Call:</strong><br>${content}`;
+      } else {
+        div.textContent = content;
+      }
+      
+      // Add timing information
+      if (timing) {
+        const timingDiv = document.createElement('div');
+        timingDiv.className = 'timestamp';
+        
+        // Calculate tokens per second
+        const tokensPerSecond = timing.outputTokens ? (timing.outputTokens / (timing.time / 1000)).toFixed(1) : 'N/A';
+        
+        timingDiv.innerHTML = `
+          ⏱️ Total: <span class="timing">${timing.time.toFixed(0)}ms</span> | 
+          📊 Tokens: ${timing.inputTokens || 0} in + ${timing.outputTokens || 0} out = ${timing.totalTokens || 0} total | 
+          ⚡ Speed: <span class="timing">${tokensPerSecond} tokens/s</span>
+        `;
+        div.appendChild(timingDiv);
+      }
+      
+      messagesDiv.appendChild(div);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    function handleKeyPress(event) {
+      if (event.key === 'Enter') {
+        sendMessage();
+      }
+    }
+
+    async function sendMessage() {
+      const message = input.value.trim();
+      if (!message) return;
+
+      // Disable input while processing
+      input.disabled = true;
+      sendBtn.disabled = true;
+      loading.style.display = 'block';
+
+      appendMessage("user", message);
+      input.value = "";
+
+      // Start timing
+      const startTime = performance.now();
+
+      try {
+        const res = await fetch(`${BACKEND_URL}/v1/chat/completions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "Qwen3-1.7B",
+            messages: [
+              { role: "user", content: message }
+            ],
+            temperature: 0.7,
+            max_tokens: 500,
+            tools: [
+              {
+                type: "function",
+                function: {
+                  name: "search_candidates",
+                  description: "Search for candidates based on role, industry, and location",
+                  parameters: {
+                    type: "object",
+                    properties: {
+                      role: { type: "string", description: "Job role/title" },
+                      industry: { type: "string", description: "Industry sector" },
+                      location: { type: "string", description: "Location" },
+                      skills: { type: "array", items: { type: "string" } },
+                      years_experience: { type: "number" }
+                    },
+                    required: ["role", "industry", "location"]
+                  }
+                }
+              }
+            ]
+          }),
+        });
+
+        // Calculate total time
+        const endTime = performance.now();
+        const totalTime = endTime - startTime;
+
+        const data = await res.json();
+        console.log("Response:", data);
+        console.log(`Total time: ${totalTime.toFixed(0)}ms`);
+
+        if (res.ok) {
+          const choice = data.choices[0];
+          const responseMessage = choice.message;
+          const usage = data.usage;
+
+          const timing = {
+            time: totalTime,
+            inputTokens: usage.prompt_tokens,
+            outputTokens: usage.completion_tokens,
+            totalTokens: usage.total_tokens
+          };
+
+          const tokensPerSecond = (usage.completion_tokens / (totalTime / 1000)).toFixed(1);
+
+          // Check if it's a tool call or regular message
+          if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
+            const toolCall = responseMessage.tool_calls[0];
+            const args = JSON.parse(toolCall.function.arguments);
+            
+            const toolDisplay = `
+Function: ${toolCall.function.name}
+Arguments:
+${JSON.stringify(args, null, 2)}
+            `.trim();
+            
+            appendMessage("bot", toolDisplay, true, timing);
+            appendMessage("bot", "✅ This would search your database with the above parameters.");
+          } else if (responseMessage.content) {
+            appendMessage("bot", responseMessage.content, false, timing);
+          } else {
+            appendMessage("bot", "❌ No response from model");
+          }
+
+          status.innerHTML = `✅ <strong>${totalTime.toFixed(0)}ms</strong> | ${usage.total_tokens} tokens | <strong>${tokensPerSecond} tokens/s</strong>`;
+        } else {
+          appendMessage("bot", `❌ Error: ${data.detail || 'Unknown error'}`);
+          status.textContent = "❌ Request failed";
+        }
+      } catch (err) {
+        appendMessage("bot", "❌ Error: Could not connect to backend. Make sure it's running on http://127.0.0.1:8001");
+        console.error(err);
+        status.textContent = "❌ Connection error";
+      } finally {
+        loading.style.display = 'none';
+        input.disabled = false;
+        sendBtn.disabled = false;
+        input.focus();
+      }
+    }
+
+    // Add welcome message
+    appendMessage("bot", "Hello! I'm Gigsama, your AI recruitment assistant. I can help you find candidates or answer questions about recruitment. Try asking me to find developers or just say hello!");
+  </script>
+</body>
+</html>
