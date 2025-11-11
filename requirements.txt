@@ -1,0 +1,15 @@
+# FastAPI and ASGI server
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+
+# HTTP client for Modal communication
+httpx==0.28.1
+
+# Data validation
+pydantic==2.10.3
+
+# Python standard library enhancements
+python-multipart==0.0.20
+
+# For environment variables (optional but recommended)
+python-dotenv==1.0.1
