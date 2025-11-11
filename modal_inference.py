@@ -1,5 +1,5 @@
 """
-Modal Inference Service for Qwen2 1.5B using llama-cpp-python
+Modal Inference Service for Qwen3 1.7B using llama-cpp-python
 Deploy with: modal deploy modal_inference.py
 """
 
