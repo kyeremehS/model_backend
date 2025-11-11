@@ -351,7 +351,7 @@ def normalize_response(raw_output: str, backend_type: str) -> str:
             if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
                 # Model returned single tool call, wrap it in tool_calls array
                 wrapped = {"tool_calls": [parsed]}
-                logger.info("ℹ️ Wrapped single tool call in tool_calls array")
+                logger.info("Wrapped single tool call in tool_calls array")
                 return json.dumps(wrapped)
             
             return text
@@ -373,7 +373,7 @@ def normalize_response(raw_output: str, backend_type: str) -> str:
                     # Check if it needs wrapping
                     if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
                         wrapped = {"tool_calls": [parsed]}
-                        logger.info("ℹ️ Wrapped extracted tool call in tool_calls array")
+                        logger.info(" Wrapped extracted tool call in tool_calls array")
                         return json.dumps(wrapped)
                     
                     return extracted
@@ -396,7 +396,7 @@ def normalize_response(raw_output: str, backend_type: str) -> str:
                         # Check if it needs wrapping
                         if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
                             wrapped = {"tool_calls": [parsed]}
-                            logger.info("ℹ️ Wrapped regex-found tool call in tool_calls array")
+                            logger.info(" Wrapped regex-found tool call in tool_calls array")
                             return json.dumps(wrapped)
                         
                         return match
@@ -405,7 +405,7 @@ def normalize_response(raw_output: str, backend_type: str) -> str:
             
             # If all extraction attempts fail, log the full output and return as-is
             # (let the client handle it)
-            logger.error(f"⚠️ Could not extract valid JSON. Full output:\n{text}")
+            logger.error(f" Could not extract valid JSON. Full output:\n{text}")
             logger.info("Returning raw output for client-side handling")
             return text
     
@@ -497,7 +497,7 @@ async def chat(request: ChatRequest):
         
         # Step 7.5: Check for Chinese characters and log warning
         if any('\u4e00' <= char <= '\u9fff' for char in normalized_text):
-            logger.warning(f"[{request_id}] ⚠️ Response contains Chinese characters despite English instruction")
+            logger.warning(f"[{request_id}] Response contains Chinese characters despite English instruction")
             logger.warning(f"[{request_id}] This may indicate the model is ignoring language instructions")
         
         # Step 8: Calculate latency

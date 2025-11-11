@@ -48,12 +48,9 @@ class InferenceResponse(BaseModel):
     error: bool = False
     message: str = ""
 
-# ============================================================================
-# Inference Function
-# ============================================================================
 
 @app.function(
-    gpu="T4",
+    gpu="cpu",
     timeout=600,
 )
 def run_inference(
@@ -125,14 +122,11 @@ def run_inference(
             "message": str(e),
         }
 
-# ============================================================================
 # FastAPI Application
-# ============================================================================
-
 web_app = FastAPI(
     title="Gigsama Inference API",
     version="1.0",
-    description="Qwen2 1.5B inference service"
+    description="Qwen3 1.7B inference service"
 )
 
 @web_app.post("/inference", response_model=InferenceResponse)
@@ -177,55 +171,9 @@ async def root():
         "docs": "/docs",
     }
 
-# ============================================================================
 # Mount FastAPI to Modal
-# ============================================================================
-
 @app.function(image=image)
 @modal.asgi_app()
 def fastapi_app():
     """Expose FastAPI app to Modal."""
     return web_app
-
-# ============================================================================
-# Local Entrypoint: Test Inference
-# ============================================================================
-
-@app.local_entrypoint()
-def test_inference():
-    """Test inference with HuggingFace model."""
-    
-    print("\n" + "="*80)
-    print("🧪 TESTING INFERENCE WITH HUGGINGFACE MODEL")
-    print("="*80)
-    
-    test_prompt = "What is artificial intelligence? Answer in one sentence."
-    print(f"\n📝 Test prompt: {test_prompt}")
-    print("\n⏳ Running inference (first run may take 1-2 min to download model)...")
-    
-    try:
-        result = run_inference.remote(
-            prompt=test_prompt,
-            temperature=0.0,
-            max_tokens=100,
-            top_p=0.9,
-        )
-        
-        if result["error"]:
-            print(f"❌ Error: {result['message']}")
-        else:
-            print(f"\n✅ SUCCESS!")
-            print(f"📄 Response: {result['text']}")
-            print(f"📊 Tokens: {result['tokens']}")
-            print(f"⏹️  Finish reason: {result['finish_reason']}")
-            
-    except Exception as e:
-        print(f"❌ Test failed: {str(e)}")
-    
-    print("\n" + "="*80)
-    print("✅ TEST COMPLETE")
-    print("="*80)
-    print("\nNext steps:")
-    print("1. Deploy: modal deploy modal_inference.py")
-    print("2. Test backend: python test_backend.py")
-    print("="*80 + "\n")
