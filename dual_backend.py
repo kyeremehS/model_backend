@@ -603,9 +603,26 @@ async def openai_chat_completions(request: OpenAIRequest):
             else:
                 messages_to_process.append(Message(role=msg.role, content=msg.content))
         
-        # If tools are provided, use deterministic backend
-        if request.tools:
+        # Get the last user message for intent analysis
+        last_message = messages_to_process[-1].content if messages_to_process else ""
+        
+        # Determine if this should be a tool call based on message content
+        # Only use deterministic mode if tools are provided AND the message needs a tool
+        should_use_tools = False
+        if request.tools and last_message:
+            # Check if message contains tool-related keywords
+            tool_keywords = ["search", "find", "list", "fetch", "query", "get", "hire", "recruit", "look for"]
+            should_use_tools = any(keyword in last_message.lower() for keyword in tool_keywords)
+        
+        # Set system message based on intent
+        if should_use_tools:
             system_message = DEFAULT_DETERMINISTIC_PROMPT
+            backend_type = "deterministic"
+            routing_reason = "Tools provided and message contains tool-related keywords"
+        else:
+            # Use creative mode for conversations
+            backend_type = "creative"
+            routing_reason = "Conversational message, using creative mode"
         
         # Create internal chat request
         internal_request = ChatRequest(
@@ -615,12 +632,7 @@ async def openai_chat_completions(request: OpenAIRequest):
             max_tokens=request.max_tokens
         )
         
-        # Call our internal chat endpoint logic
-        backend_type, routing_reason = analyze_intent(
-            internal_request.system,
-            internal_request.messages[-1].content if internal_request.messages else ""
-        )
-        
+        # Select configuration based on determined backend type
         config = DETERMINISTIC_CONFIG if backend_type == "deterministic" else CREATIVE_CONFIG
         
         if internal_request.temperature is not None:
