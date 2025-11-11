@@ -323,12 +323,18 @@ def normalize_response(raw_output: str, backend_type: str) -> str:
     """
     Normalizes model output for consistency.
     - Strips markdown code fences
+    - Strips <think> tags
     - Validates JSON for deterministic backends
     - Cleans whitespace
     """
     text = raw_output.strip()
     
     logger.info(f"Raw model output: {text[:200]}...")
+    
+    # Strip <think> tags (Qwen's internal reasoning)
+    import re
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+    text = text.strip()
     
     # Strip markdown code fences
     if text.startswith("```json"):
